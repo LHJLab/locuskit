@@ -132,6 +132,24 @@ def run(params):
         cfg["figure"]["width_mm"] = int(params["width_mm"])
     if params.get("height_mm"):
         cfg["figure"]["height_mm"] = int(params["height_mm"])
+    style_in = None
+    _sp = (params.get("style_preset") or "").strip()
+    _sj = (params.get("style_json") or "").strip()
+    if _sp or _sj:
+        style_in = {}
+        if _sp and _sp != "default":
+            style_in["style_preset"] = _sp
+        if _sj:
+            try:
+                extra = json.loads(_sj)
+                if not isinstance(extra, dict):
+                    raise ValueError("style_json 必须是对象 {…}")
+                style_in.update(extra)
+            except (ValueError, json.JSONDecodeError) as e:
+                raise SystemExit(f"style_json 解析失败: {e}")
+        log.append(f"样式: 预设={_sp or 'default'}"
+                   + (f"，覆盖 {len(json.loads(_sj))} 项" if _sj else ""))
+
     tracks = set(params.get("tracks") or [])
     cfg["encode"]["show"] = "encode" in tracks
     show_reg = "reg" in tracks
@@ -233,7 +251,8 @@ def run(params):
         r2=r2, highlight_genes=hl,
         gene_rows=cfg["genes"]["rows"], gene_name_style=cfg["genes"]["name_style"],
         build_label=cfg["build_label"],
-        figsize_mm=(cfg["figure"]["width_mm"], cfg["figure"]["height_mm"]))
+        figsize_mm=(cfg["figure"]["width_mm"], cfg["figure"]["height_mm"]),
+        style=style_in)
 
     # 附表
     tfigs = []
@@ -341,6 +360,14 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
   <option value="credset">credible set</option><option value="window">窗口全部</option>
  </select></div><div><label>LD 阈值</label><input id="ld_cut" value="0.8"></div></div>
  <div class="row"><div><label>P 上限（可选）</label><input id="p_max" placeholder="5e-8"></div></div>
+ <h2>样式</h2>
+ <div class="row"><div><label>预设</label><select id="style_preset">
+  <option value="default">default</option><option value="minimal">minimal</option>
+  <option value="poster">poster</option><option value="dark">dark</option>
+ </select></div></div>
+ <label>自定义（JSON，覆盖预设）</label>
+ <textarea id="style_json" rows="3" placeholder='{"point_marker":"s","ld_cmap":["#ffffff","#08306b"],"vline_style":"--"}'
+   style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #d5d8dc;border-radius:6px;font:11px/1.4 monospace"></textarea>
  <h2>画布 (mm)</h2>
  <div class="row"><div><label>宽</label><input id="width_mm" value="90"></div>
  <div><label>高</label><input id="height_mm" value="92"></div></div>
@@ -366,6 +393,7 @@ $('go').onclick = async () => {
     tracks: tracks(), table_source: $('table_source').value,
     ld_cut: $('ld_cut').value, p_max: $('p_max').value,
     width_mm: $('width_mm').value, height_mm: $('height_mm').value,
+    style_preset: $('style_preset').value, style_json: $('style_json').value,
     rescan: $('rescan').checked
   };
   $('go').disabled = true; $('status').textContent = '运行中…'; $('log').textContent = '';
