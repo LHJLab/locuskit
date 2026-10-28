@@ -403,7 +403,75 @@ table:
 
 ---
 
-## 六、代码结构
+## 六、样式自定义
+
+所有视觉参数都在 `Style` 里，**默认值等于自动模式**（不改就与之前完全一致）。
+三个入口都能改：
+
+```python
+from locuskit import plot_locus, Style
+
+plot_locus(..., style=Style(point_marker="s", point_size=10))         # 逐项
+plot_locus(..., style={"ld_cmap": ["#ffffff", "#08306b"]})            # 字典
+plot_locus(..., style=Style.preset("poster", vline_style="--"))       # 预设 + 覆盖
+```
+
+```yaml
+# 配置文件里
+style:
+  style_preset: poster        # 先套预设（可省）
+  point_marker: "^"           # 再用下面的键覆盖
+  index_marker: "P"
+  index_color: "#2ca02c"
+  vline_style: ":"
+```
+
+GUI 里有「样式」区：预设下拉 + 一段 JSON 覆盖框。
+
+### 6.1 预设
+
+| 预设 | 说明 |
+|---|---|
+| `default` | 当前出版风格（默认） |
+| `minimal` | 关掉红线、index 标签与透明区域 |
+| `poster` | 180×190 mm，整体字号/点径放大 |
+| `dark` | 深色背景配色 |
+
+### 6.2 可覆盖的键
+
+| 组 | 键 |
+|---|---|
+| 画布 | `width_mm` `height_mm` `dpi` `facecolor` `axes_facecolor` |
+| 字体 | `font_family` `font_sans` `font_size` `title_size` `subtitle_size` `note_size` `axis_label_size` `tick_size` `gene_label_size` `gene_label_size_hl` `legend_size` `cbar_label_size` `cbar_tick_size` `title_weight` `title_color` `subtitle_color` `note_color` |
+| 散点 | `point_marker` `point_size` `point_alpha` `point_edge` `point_edge_width` `draw_background_points` `background_color` `background_size` `background_alpha` |
+| 着色 | `ld_cmap` `ld_vmin` `ld_vmax` `ld_cbar` `ld_label` `ld_ticks` `pip_cmap` `pip_cbar` `pip_label` |
+| index SNP | `index_marker` `index_size` `index_color` `index_edge` `index_edge_width` `index_label` `index_label_size` `index_label_dy` `index_label_color` |
+| credible 圈 | `cred_marker` `cred_size` `cred_edge` `cred_edge_width` `cred_face` |
+| 参考线/区域 | `vline` `vline_color` `vline_width` `vline_style` `vline_alpha` `region_span` `region_color` `region_alpha` |
+| 基因轨道 | `gene_color` `gene_hl_color` `gene_lw` `gene_lw_hl` `gene_exon_h` `gene_arrows` `gene_arrow_size` |
+| 调控/ENCODE | `reg_colors`（`[(类型, 颜色), …]`）`reg_min_width_frac` `encode_colors` `encode_datasets` |
+| 布局 | `left` `right` `right_no_cbar` `bottom` `header_mm` `header_mm_small` `footer_mm` `gap_mm` `gene_row_mm` `reg_track_mm` `encode_row_mm` `assoc_min_mm` `hspace` `wspace` `cbar_width_ratio` |
+| 脊线/网格 | `spines`（可见的边，如 `["left","bottom"]`）`spine_width` `grid` `grid_color` `grid_width` |
+
+`ld_cmap` 的三种写法：
+
+```yaml
+ld_cmap: viridis                         # matplotlib 色带名
+ld_cmap: ["#ffffff", "#08306b"]          # 颜色序列（等距插值）
+ld_cmap: [[0,"#d9d9d9"],[0.2,"#d9d9d9"],[0.2,"#1f78b4"],[1,"#8c0d0d"]]   # 指定位置
+```
+
+### 6.3 两个注意点
+
+* **低 LD 点会不会消失取决于色带起点**：默认色带前 20% 是固定的 `#d9d9d9`，
+  所以 r²<0.2 的点是浅灰、仍然可见；若改成 `["#ffffff","#08306b"]`，
+  低 LD 点会变成白色（等于看不见）。想让它们可见就把第一段设成浅灰。
+* **页眉高度会随字号自动加高**（`header_mm` 只是下限），所以放大字号不会让图例压到轴上；
+  若希望边框更紧凑，就同时调小 `header_mm` 与各 `*_size`。
+
+---
+
+## 七、代码结构
 
 ```
 locuskit/
@@ -420,7 +488,7 @@ locuskit/
 └── gui.py                         Flask 单页界面
 ```
 
-## 七、限制
+## 八、限制
 
 * `ld.match_by: position` 要求面板与汇总统计同构建；跨构建请用 `rsid`。
 * 用 EUR 面板给东亚数据上色属近似：面板里没有的变异保持灰点。
