@@ -38,6 +38,7 @@ DEFAULTS = {
     "table": {"enabled": True, "source": "credset", "top_n": 50, "page": "A4L",
               "fontsize": 5.8, "ld_cut": 0.8},
     "cache_dir": "cache",
+    "style": None,
 }
 
 
@@ -191,7 +192,8 @@ def main(argv=None):
         cfg["output"]["formats"] = a.formats
     if a.no_table:
         cfg["table"]["enabled"] = False
-    style()
+    from .style import Style
+    Style.of(cfg.get("style")).apply_rcparams()
     cache = Path(cfg["cache_dir"])
     cache.mkdir(parents=True, exist_ok=True)
     outdir = Path(cfg["output"]["dir"])
@@ -344,7 +346,7 @@ def main(argv=None):
             gene_name_style=cfg["genes"]["name_style"],
             build_label=cfg["build_label"],
             figsize_mm=(cfg["figure"]["width_mm"], cfg["figure"]["height_mm"]),
-            dpi=cfg["figure"]["dpi"])
+            dpi=cfg["figure"]["dpi"], style=cfg.get("style"))
 
         # 附表
         tfigs = []
