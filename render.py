@@ -266,6 +266,12 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
     if index_pos is None:
         index_pos = next((r["pos"] for r in recs if r["id"] == index_snp), None)
 
+    # ---------- 是否会有色标（决定右侧是否留位）
+    _has_pip = bool(credset) and any(
+        not math.isnan(c.get("pip", float("nan"))) for c in (credset or []))
+    will_cbar = ((r2 is not None and color_by in ("auto", "ld"))
+                 or (r2 is None and _has_pip and color_by in ("auto", "pip")))
+
     # ---------- 轨道与版面（按毫米分配，随画布大小自适应）
     w_mm, h_mm = float(figsize_mm[0]), float(figsize_mm[1])
     header_mm = 14.0 if (genes and show_reg and reg is not None) else 11.0
@@ -292,9 +298,10 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
     top = 1.0 - header_mm / h_mm
     fig = plt.figure(figsize=(w_mm / 25.4, h_mm / 25.4))
     gs = fig.add_gridspec(len(names), 2, height_ratios=height_ratios,
-                          width_ratios=[1, 0.030],
+                          width_ratios=[1, 0.030] if will_cbar else [1, 0.001],
                           hspace=0.20, wspace=0.040,
-                          left=0.142, right=0.885, top=top, bottom=bottom)
+                          left=0.142, right=0.885 if will_cbar else 0.975,
+                          top=top, bottom=bottom)
     axes = {}
     order = names
     for i, n in enumerate(order):
@@ -302,6 +309,7 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
     cax = fig.add_subplot(gs[0, 1].subgridspec(10, 1)[0:7, 0])
 
     ax = axes["assoc"]
+    drew_cbar = False
 
     # ---------- 关联
     ax.axhline(0, color="none")
@@ -316,6 +324,7 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
             m = ax.scatter(pos[ok], y[ok], s=7.0, c=r2[ok], cmap=LD_CMAP, vmin=0, vmax=1,
                            linewidths=0, alpha=.95, zorder=3)
             cb = fig.colorbar(m, cax=cax)
+            drew_cbar = True
             cb.set_label(ld_label, fontsize=5.8)
             cb.set_ticks([0, .2, .4, .6, .8, 1.0])
             cb.ax.tick_params(labelsize=5.2, length=1.5)
@@ -333,6 +342,7 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
             m = ax.scatter(pos[ok], y[ok], s=7.0, c=vals[ok], cmap="viridis", vmin=0, vmax=1,
                            linewidths=0, alpha=.95, zorder=3)
             cb = fig.colorbar(m, cax=cax)
+            drew_cbar = True
             cb.set_label("credible-set PIP", fontsize=5.8)
             cb.ax.tick_params(labelsize=5.2, length=1.5)
             cb.outline.set_linewidth(0.5)
@@ -426,6 +436,8 @@ def plot_locus(records, *, chrom=None, index_snp=None, index_pos=None,
                    handlelength=1.1, handleheight=0.55, handletextpad=.35, columnspacing=1.2,
                    borderpad=0, borderaxespad=0)
 
+    if not drew_cbar:
+        cax.set_visible(False)
     info = {"lo": lo, "hi": hi, "chrom": chrom, "index_pos": index_pos,
             "n_variants": len(recs), "n_genes": n_gene, "n_labelled": n_lab,
             "reg_counts": reg_counts, "color_mode": mode,
