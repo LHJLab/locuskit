@@ -25,12 +25,14 @@ from .gwas import scan_windows, apply_liftover, read_header, resolve_columns
 from .ld import LDPanel
 from .annot import GeneIndex, RegFeatures, EncodePeaks, EvidenceTable
 from .render import plot_locus, style, LD_CMAP, REG_COLORS, ENC_COLORS
+from .style import Style, PRESETS
 from .tables import detail_pages, DEFAULT_COLUMNS
 
 __all__ = [
     "Chain", "scan_windows", "apply_liftover", "read_header", "resolve_columns",
     "LDPanel", "GeneIndex", "RegFeatures", "EncodePeaks", "EvidenceTable",
     "plot_locus", "style", "LD_CMAP", "REG_COLORS", "ENC_COLORS",
+    "Style", "PRESETS",
     "detail_pages", "DEFAULT_COLUMNS",
 ]
 __version__ = "0.1.0"
