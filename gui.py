@@ -43,6 +43,17 @@ APP = Flask(__name__)
 CACHE = ROOT / "cache" / "gui"
 OUT = ROOT / "figures_gui"
 
+
+def set_root(path):
+    """切换工作目录（打包成可执行文件后，工作目录 = exe 所在目录）。"""
+    global ROOT, CACHE, OUT
+    ROOT = Path(path).resolve()
+    CACHE = ROOT / "cache" / "gui"
+    OUT = ROOT / "figures_gui"
+    CACHE.mkdir(parents=True, exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
+    return ROOT
+
 _STATE = {"cfg_path": None, "cfg": None, "objs": None, "t0": 0.0}
 
 
@@ -379,7 +390,8 @@ $('go').onclick = async () => {
 @APP.route("/")
 def index():
     cfgs = []
-    for p in sorted((ROOT / "code").glob("config*.yaml")):
+    code_dir = ROOT / "code"
+    for p in sorted(code_dir.glob("config*.yaml")) if code_dir.is_dir() else []:
         try:
             if "cache_dir" in (yaml_load(p) or {}):
                 cfgs.append(str(p.relative_to(ROOT)))
