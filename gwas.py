@@ -36,26 +36,70 @@ def _num(x, default=float("nan")):
         return default
 
 
+_KNOWN_TOKENS = {c.upper() for cands in CANDIDATES.values() for c in cands}
+
+
+def _norm_col(name):
+    """列名归一化：去掉前导 #（可能多个）、去空白、转大写。"""
+    return str(name).strip().lstrip("#").strip().upper()
+
+
+def _looks_like_header(fields, min_hits=2):
+    """判断一行是不是表头：至少 min_hits 个 token 命中已知列名。
+
+    用来区分 "##fileFormat=..." 这类真注释行，与 "##CHROM\tPOS\t..." 这种
+    以 ## 开头的表头。
+    """
+    hits = sum(1 for f in fields if _norm_col(f) in _KNOWN_TOKENS)
+    return hits >= min_hits
+
+
 def read_header(path, comment_prefix="##"):
-    """返回 (skiprows, header)。header 是第一条非注释行按 \\t 切分的列名。"""
+    """返回 (skiprows, header)。
+
+    跳过注释行，但**以 ## 开头的表头也会被识别**（例如 `##CHROM\tPOS\tPVAL`）。
+    """
     skip = 0
     with _open_text(path) as fh:
         for line in fh:
-            if not line or line.startswith(comment_prefix):
+            if not line.strip():
                 skip += 1
                 continue
-            return skip, [c.strip() for c in line.rstrip("\n").rstrip("\r").split("\t")]
+            fields = [c.strip() for c in line.rstrip("\n").rstrip("\r").split("\t")]
+            if line.startswith(comment_prefix) and not _looks_like_header(fields):
+                skip += 1
+                continue
+            return skip, fields
     raise ValueError(f"{path}: 未找到表头")
 
 
 def resolve_columns(header, columns=None, required=("chr", "pos", "p")):
-    """把内部字段映射到列名；columns 里显式给了就用它，否则按候选名猜。"""
+    """把内部字段映射到文件里的实际列名。
+
+    匹配顺序：完全相等 → 归一化后相等（忽略前导 # 与大小写）。
+    因此 `CHROM` / `#CHROM` / `##CHROM` / `chr` 都能被同一个候选名命中。
+    """
     columns = dict(columns or {})
+    exact = {h: h for h in header}
+    norm = {}
+    for h in header:
+        norm.setdefault(_norm_col(h), h)
+
+    def find(name):
+        if name is None:
+            return None
+        name = str(name).strip()
+        if name in exact:
+            return exact[name]
+        return norm.get(_norm_col(name))
+
     out = {}
     for key, cands in CANDIDATES.items():
-        val = columns.get(key) or (columns.get(key) if key in columns else None)
+        val = columns.get(key)
         if val in (None, "", "null", "None"):
-            val = next((c for c in cands if c in header), None)
+            val = next((r for r in (find(c) for c in cands) if r), None)
+        else:
+            val = find(val) or val
         out[key] = val
     missing = [k for k in required if not out.get(k)]
     if missing:

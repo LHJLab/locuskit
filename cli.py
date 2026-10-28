@@ -65,23 +65,37 @@ def load_config(path):
 
 # ---------------------------------------------------------------- 输入装配
 def read_table_dicts(path, columns, comment="##", key_col=None):
-    """通用小表读取（用于 loci / credset）。"""
-    import csv
+    """通用小表读取（loci / credset）。
+
+    表头可以以 # 或 ## 开头（`##index_snp` 之类），列名匹配忽略前导 # 与大小写。
+    """
     import gzip
+    from .gwas import _looks_like_header, _norm_col
     op = gzip.open if str(path).endswith(".gz") else open
     out = []
     with op(path, "rt") as fh:
         header = None
         for line in fh:
-            if line.startswith(comment):
+            if not line.strip():
                 continue
-            f = line.rstrip("\n").split("\t")
+            f = [c.strip() for c in line.rstrip("\n").rstrip("\r").split("\t")]
+            if line.startswith(comment) and not _looks_like_header(f, min_hits=1):
+                continue
             if header is None:
-                header = [c.strip() for c in f]
-                idx = {k: (header.index(v) if v and v in header else None)
-                       for k, v in (columns or {}).items()}
+                header = f
+                norm = {}
+                for i, h in enumerate(header):
+                    norm.setdefault(_norm_col(h), i)
+                idx = {}
+                for k, v in (columns or {}).items():
+                    if v in header:
+                        idx[k] = header.index(v)
+                    elif v and _norm_col(v) in norm:
+                        idx[k] = norm[_norm_col(v)]
+                    else:
+                        idx[k] = None
                 if key_col and idx.get(key_col) is None:
-                    raise SystemExit(f"{path}: 找不到列 {columns.get(key_col)}")
+                    raise SystemExit(f"{path}: 找不到列 {columns.get(key_col)}；实际列名={header}")
                 continue
             if len(f) != len(header):
                 continue
