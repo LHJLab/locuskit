@@ -253,9 +253,17 @@ packaging\build.bat          # Windows        → dist\locuskit-gui.exe
 Linux 与 Windows 的完整构建步骤、三个必踩的坑和打包后自检见
 [第七节](#七打包为可执行文件)。
 
-### 3.4 导出序列（±x bp，可批量）
+### 3.4 导出序列（±x bp，可批量，可出图）
 
-按目标 SNP 导出参考基因组两侧的序列，并给出**效应等位版本**的序列（可用于 motif / 引物 / 碱基编辑设计）。
+按目标 SNP 导出**三条序列**：
+
+| 序列 | 含义 |
+|---|---|
+| `genome` | 参考基因组 FASTA 里的原样序列 |
+| `gwas_ref` | 把 **GWAS 的参考/非效应等位**写到 SNP 位点后的序列 |
+| `gwas_effect` | 把 **GWAS 的效应等位**写到 SNP 位点后的序列 |
+
+三条都是**正链**（与 FASTA 同向）；若 GWAS 等位在反向链，会先取互补再写入。
 
 ```bash
 python -m locuskit.seq \
@@ -264,11 +272,11 @@ python -m locuskit.seq \
   --fasta  data/001_GRCh37_DNA/Homo_sapiens.GRCh37.dna.chromosomes.fa \
   --snp    rs4702 rs3824754 rs1619283 \
   --flank  500 \
-  --out    seqs.tsv --fasta-out seqs.fa
+  --out    seqs.tsv --fasta-out seqs.fa --figure figs/
 ```
 
 ```bash
-# 从文件批量（每行一个 rsID，取第一列）
+# 从文件批量（每行一个 rsID）
 python -m locuskit.seq ... --snp-file my_snps.txt --flank 200
 
 # 用坐标指定
@@ -277,31 +285,39 @@ python -m locuskit.seq ... --snp 1:1939826
 
 | 参数 | 说明 |
 |---|---|
-| `--flank` | 两侧各取多少 bp（默认 500 → 序列长 `2*flank+1`） |
+| `--flank` | 导出时两侧各多少 bp（默认 500 → 序列长 `2*flank+1`） |
+| `--view` | **出图**时 SNP 两侧各显示多少 bp（默认 30；超出导出长度按实际显示） |
 | `--mark` | `upper`（默认：侧翼小写、SNP 位点大写）/ `brackets`（`[G]`）/ `none` |
 | `--effect-col` | 哪一列是**效应等位**：`a1`（默认）或 `a2` |
-| `--include-ref` | FASTA 里同时输出一条参考序列记录 |
-| `--snp-file` | 批量 rsID 文件 |
+| `--ref-col` | 哪一列是**参考等位**；缺省取效应列的另一列 |
+| `--figure DIR` | 每个 SNP 另存一张序列图（`.pdf` + `.png`） |
+| `--no-genome` | FASTA 里不输出 `genome` 记录（默认三条都输出） |
 
 **输出**
 
-* TSV（每 SNP 一行）：`rsid, status, chrom, pos, build, ref_base, gwas_a1, gwas_a2,
-  effect_allele, other_allele, allele_match, gwas_p, flank, seq_len, snp_offset,
-  ref_seq, effect_seq, note`
-* FASTA：`>rsid|effect|元信息`，序列为**效应等位版本**；加 `--include-ref` 时另有 `>rsid|ref|…`
+* TSV：`rsid, status, chrom, pos, build, genome_ref_base, gwas_a1, gwas_a2,
+  gwas_ref_allele, gwas_effect_allele, ref_fwd, effect_fwd, strand_vs_genome,
+  effect_is_ref, gwas_p, flank, seq_len, snp_offset, genome_seq, gwas_ref_seq,
+  gwas_effect_seq, note`
+* FASTA：每个 SNP **三条记录** —— `>rsid|genome|…`、`>rsid|gwas_ref|…`、`>rsid|gwas_effect|…`
+* 图（`--figure`）：三行碱基色块（A 绿 / C 蓝 / G 橙 / T 红），SNP 位点加框、
+  与基因组不同的位点标 ▼，标题带 rsID、坐标、两个等位与 P 值
 
-**`allele_match` 的取值**（先看两个等位里哪个等于参考碱基定链向，再判 ref/alt）：
+**`strand_vs_genome` 的取值**（先看哪个等位等于参考碱基定链向）：
 
 | 值 | 含义 |
 |---|---|
-| `forward/effect_is_ref` | 效应等位就是参考碱基（两条序列相同） |
-| `forward/effect_is_alt` | 效应等位是替代等位（两条序列不同，已替换） |
-| `reverse/…` | 同上，但数据在反向链上 |
-| `indel_or_multiallelic` | 非单碱基等位，不做替换（`note` 里说明） |
+| `forward` | 数据与 FASTA 同向 |
+| `reverse` | 数据在反向链（已取互补后写入） |
+| `indel_or_multiallelic` | 非单碱基等位，不做替换 |
 | `unmatched` | 两个等位都不匹配参考碱基 → 构建不符或多等位，需要查 |
 
-**注意**：`--effect-col` 必须与数据一致。SCZ 的 `A1` 是**参考等位**，若把 A1 映射成 `a1`，
-结果会是 `forward/effect_is_ref`（效应等位=参考等位）；此时应改用 `--effect-col a2`。
+**注意 `ref` 的含义**：这里的 "GWAS ref" 指 GWAS 文件里的**参考/非效应等位**，
+由 `--ref-col` 指定（缺省取效应列的另一列）。PGC 的 `A1` 是参考等位、`BETA` 对应 `A1`，
+所以按 `A1→a1, A2→a2` 映射时："效应"=A1、"参考"=A2。
+
+**GUI**：左侧「模式」切到**序列导出**后填 SNP（可批量）、FASTA 路径、`±bp`、
+标记方式、效应/参考列，勾「同时出序列图」即可；结果给出 TSV/FASTA 下载与图片画廊。
 
 ### 3.5 Python 库
 
