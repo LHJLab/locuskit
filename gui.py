@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import re
 import io
 import json
 import os
@@ -26,6 +27,7 @@ import numpy as np
 from . import (Chain, EncodePeaks, EvidenceTable, GeneIndex, LDPanel, RegFeatures,
                apply_liftover, detail_pages, plot_locus, scan_windows, style)
 from .cli import build_loci, load_config, read_table_dicts, window_for
+from .seq import export as seq_export, plot_sequence, write_outputs as seq_write
 
 
 def yaml_load(path):
@@ -314,6 +316,77 @@ def run(params):
                      "pages": 1 + len(tfigs)}}
 
 
+def run_seq(params):
+    """导出目标 SNP 的三条序列（基因组 / GWAS ref / GWAS effect），可选出图。"""
+    log = []
+    t0 = time.time()
+    cfg_path = params["config"]
+    cfg, _objs = _load_objects(cfg_path)
+    cfg = json.loads(json.dumps({k: v for k, v in cfg.items() if k != "style"}))
+
+    fasta = (params.get("fasta") or cfg.get("fasta") or "").strip()
+    if not fasta:
+        raise SystemExit("缺少参考基因组 FASTA 路径（配置里加 fasta: …，或在表单里填）")
+    raw = params.get("snps") or ""
+    targets = [x for x in re.split(r"[,\s]+", raw.replace(";", ",")) if x]
+    targets = list(dict.fromkeys(targets))
+    if not targets:
+        raise SystemExit("请填至少一个 SNP（rsID 或 chr:pos）")
+
+    flank = int(params.get("flank") or 500)
+    view = int(params.get("view") or 30)
+    mark = params.get("mark") or "upper"
+    eff_col = params.get("effect_col") or "a1"
+    ref_col = params.get("ref_col") or None
+    want_fig = bool(params.get("figure"))
+
+    log.append(f"配置: {cfg_path}")
+    log.append(f"目标: {len(targets)} 个 SNP，±{flank} bp，标记={mark}，效应列={eff_col}")
+    rows, records, missing, n_rows = seq_export(
+        cfg["gwas"]["path"], targets, fasta, flank=flank,
+        columns=cfg["gwas"].get("columns"),
+        comment_prefix=cfg["gwas"].get("comment_prefix", "##"),
+        build_label=cfg["build_label"], mark=mark,
+        effect_col=eff_col, ref_col=ref_col)
+    ok = [r for r in rows if r.get("status") == "ok"]
+    log.append(f"扫描 {n_rows:,} 行 → 命中 {len(ok)}/{len(targets)}")
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    tsv = OUT / f"seqs_{stamp}.tsv"
+    fa = OUT / f"seqs_{stamp}.fa"
+    seq_write(rows, records, tsv, fa)
+    log.append(f"TSV {tsv.name}（{len(rows)} 行）· FASTA {fa.name}（{len(records)} 条）")
+
+    figs = []
+    if want_fig and ok:
+        fdir = OUT / f"seqfigs_{stamp}"
+        fdir.mkdir(parents=True, exist_ok=True)
+        import matplotlib.pyplot as plt
+        for r in ok:
+            try:
+                fig = plot_sequence(r, view=view, out=str(fdir / f"{r['rsid']}.pdf"))
+                plt.close(fig)
+                figs.append({"rsid": r["rsid"],
+                             "png": f"/out/{fdir.name}/{r['rsid']}.png",
+                             "pdf": f"/out/{fdir.name}/{r['rsid']}.pdf"})
+            except Exception as e:                       # noqa: BLE001
+                log.append(f"出图失败 {r['rsid']}: {type(e).__name__}: {e}")
+        log.append(f"图 {len(figs)} 张（±{view} bp）")
+
+    if missing:
+        log.append("未在汇总统计中找到：" + ", ".join(missing[:8])
+                   + (" …" if len(missing) > 8 else ""))
+    bad = [r["rsid"] for r in rows if r.get("strand_vs_genome") == "unmatched"]
+    if bad:
+        log.append("等位与参考碱基不匹配：" + ", ".join(bad[:6]))
+    log.append(f"完成，用时 {time.time() - t0:.1f}s")
+    return {"ok": bool(ok), "tsv": f"/out/{tsv.name}", "fasta": f"/out/{fa.name}",
+            "figures": figs, "log": log,
+            "info": {"n_ok": len(ok), "n_total": len(targets), "flank": flank,
+                     "view": view, "rows": len(rows)}}
+
+
 # ---------------------------------------------------------------- 页面
 PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <title>locuskit GUI</title>
@@ -331,15 +404,22 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  button{width:100%;padding:9px;border:0;border-radius:8px;background:#2f6f4f;color:#fff;font-size:13px;font-weight:600;cursor:pointer;margin-top:14px}
  button:disabled{background:#9bb3a6;cursor:default}
  img{max-width:100%;border:1px solid #e3e5e8;border-radius:8px;background:#fff}
+ #gallery figure{margin:0;width:46%} #gallery figcaption{font-size:10px;color:#666;text-align:center}
  .links a{display:inline-block;margin-right:12px;font-size:12px;color:#2f6f4f;text-decoration:none;border-bottom:1px dashed #9ec3ae}
  pre{background:#1e2327;color:#d7e0d9;padding:10px;border-radius:8px;font-size:11px;line-height:1.45;max-height:190px;overflow:auto;white-space:pre-wrap}
  .meta{font-size:12px;color:#555;margin:8px 0}
  .hint{font-size:11px;color:#888;margin-top:4px}
 </style></head><body><div class="wrap">
 <div class="panel left">
- <h1>locuskit · 位点图</h1>
+ <h1>locuskit</h1>
+ <label>模式</label>
+ <select id="mode">
+  <option value="plot">位点图（GWAS + 注释）</option>
+  <option value="seq">序列导出（±bp，三条序列）</option>
+ </select>
  <label>配置文件</label>
  <select id="config">__CONFIGS__</select>
+ <div id="grp-plot">
  <h2>位点</h2>
  <label>index SNP</label><input id="snp" placeholder="rs72986630">
  <div class="row"><div><label>染色体</label><input id="chrom" placeholder="19"></div>
@@ -372,6 +452,28 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  <div class="row"><div><label>宽</label><input id="width_mm" value="90"></div>
  <div><label>高</label><input id="height_mm" value="92"></div></div>
  <label style="margin-top:10px"><input type="checkbox" id="rescan"> 忽略缓存重扫</label>
+ </div>
+
+ <div id="grp-seq" style="display:none">
+ <h2>序列导出</h2>
+ <label>目标 SNP（逗号/空格/换行分隔，可批量）</label>
+ <textarea id="snps" rows="3" placeholder="rs4702, rs3824754, 1:1939826"
+   style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #d5d8dc;border-radius:6px;font:11px/1.4 monospace"></textarea>
+ <label>参考基因组 FASTA（需同名 .fai）</label>
+ <input id="fasta" placeholder="data/001_GRCh37_DNA/Homo_sapiens.GRCh37.dna.chromosomes.fa">
+ <div class="row"><div><label>导出 ±bp</label><input id="flank" value="500"></div>
+ <div><label>图上显示 ±bp</label><input id="view" value="30"></div></div>
+ <div class="row"><div><label>标记方式</label><select id="mark">
+   <option value="upper">侧翼小写+SNP大写</option>
+   <option value="brackets">[G] 括号</option>
+   <option value="none">都不标</option></select></div>
+ <div><label>效应等位列</label><select id="effect_col">
+   <option value="a1">a1</option><option value="a2">a2</option></select></div></div>
+ <div class="row"><div><label>参考等位列</label><select id="ref_col">
+   <option value="">自动（取另一列）</option>
+   <option value="a1">a1</option><option value="a2">a2</option></select></div></div>
+ <label style="margin-top:8px"><input type="checkbox" id="figure" checked> 同时出序列图</label>
+ </div>
  <button id="go">出图</button>
  <div class="hint" id="status"></div>
 </div>
@@ -380,13 +482,21 @@ PAGE = """<!doctype html><html lang="zh"><head><meta charset="utf-8">
  <div class="meta" id="meta">—</div>
  <img id="prev" style="display:none">
  <div class="links" id="links"></div>
+ <div id="gallery" style="display:flex;flex-wrap:wrap;gap:10px;margin-top:10px"></div>
  <h2>日志</h2>
  <pre id="log">等待出图…</pre>
 </div></div>
 <script>
 const $ = id => document.getElementById(id);
 const tracks = () => ['ld','genes','reg','encode'].filter(t => $('t_'+t).checked);
+$('mode').onchange = () => {
+  const seq = $('mode').value === 'seq';
+  $('grp-plot').style.display = seq ? 'none' : '';
+  $('grp-seq').style.display = seq ? '' : 'none';
+  $('go').textContent = seq ? '导出序列' : '出图';
+};
 $('go').onclick = async () => {
+  if ($('mode').value === 'seq') return runSeq();
   const body = {
     config: $('config').value, snp: $('snp').value.trim(), chrom: $('chrom').value.trim(),
     window_kb: $('window_kb').value, start: $('start').value, end: $('end').value,
@@ -412,6 +522,38 @@ $('go').onclick = async () => {
   } catch (e) { $('log').textContent = String(e); $('status').textContent = '失败'; }
   finally { $('go').disabled = false; }
 };
+
+async function runSeq() {
+  const body = {
+    config: $('config').value,
+    snps: $('snps').value,
+    fasta: $('fasta').value,
+    flank: $('flank').value, view: $('view').value, mark: $('mark').value,
+    effect_col: $('effect_col').value, ref_col: $('ref_col').value,
+    figure: $('figure').checked
+  };
+  $('go').disabled = true; $('status').textContent = '导出中…'; $('log').textContent = '';
+  $('prev').style.display = 'none'; $('links').innerHTML = ''; $('meta').textContent = '—';
+  $('gallery').innerHTML = '';
+  try {
+    const r = await fetch('/seq', {method:'POST', headers:{'Content-Type':'application/json'},
+                                   body: JSON.stringify(body)});
+    const d = await r.json();
+    $('log').textContent = (d.log || []).join('\n') || (d.error || '');
+    if (!d.ok) { $('status').textContent = '失败'; return; }
+    $('links').innerHTML = `<a href="${d.tsv}" target="_blank">下载 TSV</a>`
+      + `<a href="${d.fasta}" target="_blank">下载 FASTA</a>`;
+    $('meta').textContent = `${d.info.n_ok}/${d.info.n_total} 个 SNP · ±${d.info.flank} bp`
+      + ` · 图 ±${d.info.view} bp`;
+    if (d.figures.length) {
+      $('gallery').innerHTML = d.figures.map(f =>
+        `<figure><a href="${f.pdf}" target="_blank"><img src="${f.png}?t=${Date.now()}"></a>
+         <figcaption>${f.rsid}</figcaption></figure>`).join('');
+    }
+    $('status').textContent = '完成';
+  } catch (e) { $('log').textContent = String(e); $('status').textContent = '失败'; }
+  finally { $('go').disabled = false; }
+}
 </script></body></html>"""
 
 
@@ -437,6 +579,18 @@ def plot_endpoint():
     except SystemExit as e:
         return jsonify({"ok": False, "log": [str(e)], "error": str(e)})
     except Exception as e:                            # noqa: BLE001
+        return jsonify({"ok": False, "log": traceback.format_exc().splitlines(),
+                        "error": f"{type(e).__name__}: {e}"})
+
+
+@APP.route("/seq", methods=["POST"])
+def seq_endpoint():
+    params = request.get_json(force=True)
+    try:
+        return jsonify(run_seq(params))
+    except SystemExit as e:
+        return jsonify({"ok": False, "log": [str(e)], "error": str(e)})
+    except Exception as e:                                 # noqa: BLE001
         return jsonify({"ok": False, "log": traceback.format_exc().splitlines(),
                         "error": f"{type(e).__name__}: {e}"})
 

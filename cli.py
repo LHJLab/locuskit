@@ -39,6 +39,7 @@ DEFAULTS = {
               "fontsize": 5.8, "ld_cut": 0.8},
     "cache_dir": "cache",
     "style": None,
+    "fasta": None,
 }
 
 
