@@ -271,9 +271,11 @@ def export(gwas_path, targets, fasta_path, flank=500, columns=None,
 # =============================================================================
 # 可视化
 # =============================================================================
-BASE_COLORS = {"A": "#4daf4a", "C": "#377eb8", "G": "#ff7f00", "T": "#e41a1c",
-               "N": "#bdbdbd", "a": "#4daf4a", "c": "#377eb8", "g": "#ff7f00",
-               "t": "#e41a1c", "n": "#bdbdbd"}
+# 淡色系（ColorBrewer Paired 浅色），配深灰字，避免大片高饱和色
+BASE_COLORS = {"A": "#b2df8a", "C": "#a6cee3", "G": "#fdbf6f", "T": "#fb9a99",
+               "N": "#d9d9d9", "a": "#b2df8a", "c": "#a6cee3", "g": "#fdbf6f",
+               "t": "#fb9a99", "n": "#d9d9d9"}
+BASE_TEXT = "#333333"
 
 
 def plot_sequence(row, view=30, out=None, dpi=300, width_mm=180, row_mm=7.0,
@@ -313,9 +315,9 @@ def plot_sequence(row, view=30, out=None, dpi=300, width_mm=180, row_mm=7.0,
     n = hi - lo
     shown = min(center - lo, hi - 1 - center)
 
-    h_mm = 26 + row_mm * len(seqs)
+    h_mm = 20 + row_mm * len(seqs)
     fig = plt.figure(figsize=(width_mm / 25.4, h_mm / 25.4))
-    ax = fig.add_axes([0.12, 0.20, 0.84, 0.62])
+    ax = fig.add_axes([0.13, 0.06, 0.83, 0.76])
     ax.set_xlim(lo - 0.5, hi - 0.5)
     ax.set_ylim(-0.6, len(seqs) - 0.05)
     ax.invert_yaxis()
@@ -337,38 +339,36 @@ def plot_sequence(row, view=30, out=None, dpi=300, width_mm=180, row_mm=7.0,
             base_col = BASE_COLORS.get(up, "#cccccc")
             is_snp = (lo + i) == center
             ax.add_patch(Rectangle((lo + i - 0.5, r - 0.42), 1.0, 0.84,
-                                   facecolor=base_col, edgecolor="none",
-                                   alpha=0.95 if not is_snp else 1.0, zorder=2))
+                                   facecolor=base_col, edgecolor="white",
+                                   linewidth=0.5, zorder=2))
             if letters:
                 ax.text(lo + i, r, up, ha="center", va="center",
-                        fontsize=font_size, color="white", zorder=3,
+                        fontsize=font_size, color=BASE_TEXT, zorder=3,
                         fontweight="bold" if is_snp else "normal")
         if not letters and len(seg):
             ax.text(lo - 1.0, r, "5\u2032", ha="right", va="center", fontsize=font_size)
     # SNP 竖线 + 方框
-    ax.axvline(center, color="#111111", lw=0.6, ls=":", zorder=1)
     for r in range(len(seqs)):
         ax.add_patch(Rectangle((center - 0.5, r - 0.44), 1.0, 0.88, facecolor="none",
-                               edgecolor="#111111", linewidth=0.9, zorder=4))
+                               edgecolor="#222222", linewidth=0.8, zorder=4))
     # 与基因组不同的列加标记
     g = seqs[0][1][lo:hi]
     for r in (1, 2):
         for i, ch in enumerate(seqs[r][1][lo:hi]):
             if ch.upper() != g[i].upper():
-                ax.plot([lo + i], [len(seqs) - 0.30 + (r - 1) * 0.13],
+                ax.plot([lo + i], [len(seqs) - 0.17 + (r - 1) * 0.11],
                         marker="v", ms=2.4, color="#111111", zorder=5)
 
     ttl = (f"{row['rsid']}  |  chr{row['chrom']}:{int(row['pos']):,} ({row['build']})  |  "
            f"genome={row['genome_ref_base']}  GWAS ref={row.get('gwas_ref_allele') or '?'}"
            f"  effect={row.get('gwas_effect_allele') or '?'}")
-    fig.text(0.02, 0.955, ttl, fontsize=font_size + 1.6, fontweight="bold", va="top")
-    sub = (f"strand={row.get('strand_vs_genome')}   effect_is_ref={row.get('effect_is_ref')}"
-           f"   P={row.get('gwas_p')}   shown \u00b1{shown} bp (exported \u00b1{row['flank']} bp)")
-    fig.text(0.02, 0.905, sub, fontsize=font_size, va="top", color="#444444")
-    fig.text(0.02, 0.045,
-             "A green \u00b7 C blue \u00b7 G orange \u00b7 T red   |   dotted line = SNP   "
-             "|   \u25bc = differs from genome",
-             fontsize=font_size - 0.4, color="#666666", va="bottom")
+    fig.text(0.02, 0.96, ttl, fontsize=font_size + 1.6, fontweight="bold", va="top")
+    _p = row.get("gwas_p")
+    sub = (f"P = {_p}   " if _p else "") + f"\u00b1{shown} bp"
+    _strand = row.get("strand_vs_genome")
+    if _strand and _strand != "forward":
+        sub += f"   strand={_strand}"
+    fig.text(0.02, 0.90, sub, fontsize=font_size, va="top", color="#555555")
     if out:
         os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
         fig.savefig(out, dpi=dpi)
