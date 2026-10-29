@@ -250,7 +250,8 @@ packaging\build.bat          # Windows        → dist\locuskit-gui.exe
 
 把产物放到含 `code/` 与 `data/` 的目录后双击，浏览器会自动打开
 `http://127.0.0.1:8088/`。**数据不打进 exe**（通常几十 GB）。
-构建细节、跨平台限制与踩坑记录见 `packaging/README.md`。
+Linux 与 Windows 的完整构建步骤、三个必踩的坑和打包后自检见
+[第七节](#七打包为可执行文件)。
 
 ### 3.4 Python 库
 
@@ -471,7 +472,119 @@ ld_cmap: [[0,"#d9d9d9"],[0.2,"#d9d9d9"],[0.2,"#1f78b4"],[1,"#8c0d0d"]]   # 指�
 
 ---
 
-## 七、代码结构
+## 七、打包为可执行文件
+
+Python 环境齐全的人直接 `python3 -m locuskit` 即可；要发给不装 Python 的人时再打包。
+
+> **PyInstaller 不支持交叉编译**：要 `.exe` 就在 Windows 上打，要 Linux 二进制就在 Linux 上打。
+> 打出来的程序**不含数据**（`data/` 常几十 GB），需与 `code/`、`data/` 放在同一目录。
+
+### 7.1 前置
+
+| 项 | 要求 |
+|---|---|
+| Python | 3.10–3.12（本机验证 3.10.19） |
+| PyInstaller | **6.x**（5.13 在 anaconda Python 3.10.19 上打出的程序起不来） |
+| 虚拟环境 | **必须新建干净 venv**，不要加 `--system-site-packages` |
+
+```bash
+python -m pip install numpy matplotlib flask pyyaml pyinstaller
+```
+
+### 7.2 Linux / macOS
+
+```bash
+cd locuskit                                   # 仓库根（= 包目录）
+python3 -m venv .venv-pack
+. .venv-pack/bin/activate
+python -m pip install -U pip
+python -m pip install numpy matplotlib flask pyyaml pyinstaller
+
+python build_exe.py                           # 产物：dist/locuskit-gui
+```
+
+### 7.3 Windows
+
+```bat
+cd locuskit
+python -m venv .venv-pack
+.venv-pack\Scripts\activate.bat
+python -m pip install -U pip
+python -m pip install numpy matplotlib flask pyyaml pyinstaller
+
+python build_exe.py                           :: 产物：dist\locuskit-gui.exe
+```
+
+`build_exe.py` 会自己算好两个容易写错的路径（`--paths` 必须是**包的父目录**，
+入口是包内的 `__main__.py`），并默认 `--onefile`、排除 Qt/pandas/scipy 等用不到的重依赖。
+常用选项：`--debug`（保留控制台）、`--dist out/`（换输出目录）、`--no-hooks`。
+
+没有 Windows 机器时可在 CI 里跑：GitHub Actions 用 `windows-latest` 执行上面三行，
+把 `dist/locuskit-gui.exe` 作为 artifact 上传。
+
+### 7.4 等价的手工命令
+
+不想用 `build_exe.py` 时（注意在**仓库的上一层**执行，`--paths` 指向该层）：
+
+```bash
+python -m PyInstaller --onefile --name locuskit-gui --clean --noconfirm \
+  --paths .. --collect-submodules locuskit \
+  --additional-hooks-dir locuskit/_pyinstaller_hooks \
+  --exclude-module tkinter --exclude-module pandas --exclude-module scipy \
+  --exclude-module PyQt5 --exclude-module PyQt6 \
+  --exclude-module PySide2 --exclude-module PySide6 \
+  --exclude-module shiboken2 --exclude-module shiboken6 \
+  locuskit/__main__.py
+```
+
+### 7.5 三个必须注意的点
+
+1. **干净 venv**：anaconda 的 numpy 外链 MKL，打出来的程序一启动就报
+   `libmkl_core.so.2: cannot open shared object file`。干净 venv 装的是 PyPI numpy，
+   自带 OpenBLAS 在 `numpy.libs/`，才会被一起打包。`build_exe.py` 会检测并警告这种情况。
+2. **PyInstaller 用 6.x**：5.13 在本机 anaconda 3.10.19 上连 hello-world 都因
+   `ModuleNotFoundError: ipaddress` 起不来。
+3. **排除所有 Qt 绑定**：环境里同时有 PyQt6 与 PySide6 时 PyInstaller 直接中止；
+   本工具只用 Agg 后端，已全部排除。
+
+若报 `Failed to import module __PyInstaller_hooks_0_numpy`（内置 hook 加载失败），
+挂上仓库里的最小 hook：
+
+```bash
+--additional-hooks-dir locuskit/_pyinstaller_hooks
+```
+
+里面有 `hook-numpy.py`（收集 `numpy.libs/*.so`）与 `hook-matplotlib.py`（收集 `mpl-data`）。
+
+### 7.6 打包后自检
+
+```bash
+./dist/locuskit-gui --help                        # 1) 能启动
+./dist/locuskit-gui --no-browser --port 8088 &    # 2) 页面可访问
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8088/
+curl -s -X POST http://127.0.0.1:8088/plot -H 'Content-Type: application/json' \
+  -d '{"config":"code/config_scz_v2.yaml","snp":"rs4702","chrom":"5",
+       "tracks":["ld","genes","reg"],"table_source":"ld","ld_cut":"0.8"}'   # 3) 能出图
+```
+
+三步都过才算可用；只做第 1 步容易漏掉 numpy/matplotlib 没被收进包里的问题。
+
+### 7.7 分发怎么摆
+
+```
+locuskit-work/
+├── locuskit-gui        ← 可执行文件（Windows 为 .exe）
+├── code/               ← config*.yaml，GUI 下拉读这里
+├── data/               ← 汇总统计、GTF、LD 面板…
+└── figures_gui/        ← 出图自动写到这里
+```
+
+双击可执行文件 → 浏览器自动打开 `http://127.0.0.1:8088/`。
+服务器上用 `--no-browser --port N`，或用 `--root` 指定别的工作目录。
+
+---
+
+## 八、代码结构
 
 ```
 locuskit/
@@ -485,10 +598,14 @@ locuskit/
 ├── render.py     plot_locus()     1–4 条轨道的位点图（版面按毫米自适应）
 ├── tables.py     detail_pages()   附表（列可自定义，缺字段自动省略）
 ├── cli.py                         YAML 批量出图
-└── gui.py                         Flask 单页界面
+├── gui.py                         Flask 单页界面
+├── style.py                       样式表与预设
+├── __main__.py                    `python -m locuskit` / 可执行文件入口
+├── build_exe.py                   一键打包（PyInstaller）
+└── _pyinstaller_hooks/            内置 hook 加载失败时的最小 hook
 ```
 
-## 八、限制
+## 九、限制
 
 * `ld.match_by: position` 要求面板与汇总统计同构建；跨构建请用 `rsid`。
 * 用 EUR 面板给东亚数据上色属近似：面板里没有的变异保持灰点。
