@@ -648,6 +648,7 @@ locuskit/
 ├── render.py     plot_locus()     1–4 条轨道的位点图（版面按毫米自适应）
 ├── tables.py     detail_pages()   附表（列可自定义，缺字段自动省略）
 ├── cli.py                         YAML 批量出图
+├── seq.py                         序列导出（±x bp，效应等位版本）
 ├── gui.py                         Flask 单页界面
 ├── style.py                       样式表与预设
 ├── __main__.py                    `python -m locuskit` / 可执行文件入口
