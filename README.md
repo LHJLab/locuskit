@@ -253,7 +253,57 @@ packaging\build.bat          # Windows        → dist\locuskit-gui.exe
 Linux 与 Windows 的完整构建步骤、三个必踩的坑和打包后自检见
 [第七节](#七打包为可执行文件)。
 
-### 3.4 Python 库
+### 3.4 导出序列（±x bp，可批量）
+
+按目标 SNP 导出参考基因组两侧的序列，并给出**效应等位版本**的序列（可用于 motif / 引物 / 碱基编辑设计）。
+
+```bash
+python -m locuskit.seq \
+  --gwas   data/003_SCZ_Nature2022/PGC3_SCZ_wave3.core.autosome.public.v3.vcf.tsv.gz \
+  --columns '{"chr":"CHROM","pos":"POS","id":"ID","a1":"A1","a2":"A2"}' \
+  --fasta  data/001_GRCh37_DNA/Homo_sapiens.GRCh37.dna.chromosomes.fa \
+  --snp    rs4702 rs3824754 rs1619283 \
+  --flank  500 \
+  --out    seqs.tsv --fasta-out seqs.fa
+```
+
+```bash
+# 从文件批量（每行一个 rsID，取第一列）
+python -m locuskit.seq ... --snp-file my_snps.txt --flank 200
+
+# 用坐标指定
+python -m locuskit.seq ... --snp 1:1939826
+```
+
+| 参数 | 说明 |
+|---|---|
+| `--flank` | 两侧各取多少 bp（默认 500 → 序列长 `2*flank+1`） |
+| `--mark` | `upper`（默认：侧翼小写、SNP 位点大写）/ `brackets`（`[G]`）/ `none` |
+| `--effect-col` | 哪一列是**效应等位**：`a1`（默认）或 `a2` |
+| `--include-ref` | FASTA 里同时输出一条参考序列记录 |
+| `--snp-file` | 批量 rsID 文件 |
+
+**输出**
+
+* TSV（每 SNP 一行）：`rsid, status, chrom, pos, build, ref_base, gwas_a1, gwas_a2,
+  effect_allele, other_allele, allele_match, gwas_p, flank, seq_len, snp_offset,
+  ref_seq, effect_seq, note`
+* FASTA：`>rsid|effect|元信息`，序列为**效应等位版本**；加 `--include-ref` 时另有 `>rsid|ref|…`
+
+**`allele_match` 的取值**（先看两个等位里哪个等于参考碱基定链向，再判 ref/alt）：
+
+| 值 | 含义 |
+|---|---|
+| `forward/effect_is_ref` | 效应等位就是参考碱基（两条序列相同） |
+| `forward/effect_is_alt` | 效应等位是替代等位（两条序列不同，已替换） |
+| `reverse/…` | 同上，但数据在反向链上 |
+| `indel_or_multiallelic` | 非单碱基等位，不做替换（`note` 里说明） |
+| `unmatched` | 两个等位都不匹配参考碱基 → 构建不符或多等位，需要查 |
+
+**注意**：`--effect-col` 必须与数据一致。SCZ 的 `A1` 是**参考等位**，若把 A1 映射成 `a1`，
+结果会是 `forward/effect_is_ref`（效应等位=参考等位）；此时应改用 `--effect-col a2`。
+
+### 3.5 Python 库
 
 ```python
 from locuskit import (scan_windows, apply_liftover, Chain, LDPanel,
