@@ -170,8 +170,12 @@ def build_sequence(seq, pos_in_seq, allele, mark="upper"):
 
 def export(gwas_path, targets, fasta_path, flank=500, columns=None,
            comment_prefix="##", build_label="GRCh37", mark="upper",
-           include_ref=False, effect_col="a1"):
-    """返回 (rows, fasta_records)。"""
+           include_genome=True, effect_col="a1", ref_col=None):
+    """导出每个 SNP 的三条序列：基因组参考 / GWAS 参考等位 / GWAS 效应等位。
+
+    返回 (rows, fasta_records, missing, n_rows_scanned)。
+    三条序列都是**正链**（与 FASTA 同向）：若 GWAS 等位在反向链，会先取互补再写入。
+    """
     variants, n_rows = lookup_variants(gwas_path, targets, columns, comment_prefix)
     missing = [t for t in targets if t not in variants]
     fa = Fasta(fasta_path)
@@ -182,81 +186,205 @@ def export(gwas_path, targets, fasta_path, flank=500, columns=None,
             if not v:
                 rows.append({"rsid": t, "status": "not_in_gwas"})
                 continue
-            lo, hi = v["pos"] - flank, v["pos"] + flank
-            ref_seq_full = fa.fetch(v["chrom"], lo, hi)
-            if len(ref_seq_full) < 2 * flank + 1:
-                # 靠近染色体端点
-                lo = max(1, v["pos"] - flank)
-                hi = v["pos"] + flank
+            lo, hi = max(1, v["pos"] - flank), v["pos"] + flank
+            seq = fa.fetch(v["chrom"], lo, hi)
             ref_base = fa.fetch(v["chrom"], v["pos"], v["pos"])
-            if not ref_base:
+            if not seq or not ref_base:
                 rows.append({"rsid": t, "chrom": v["chrom"], "pos": v["pos"],
                              "status": "no_reference"})
                 continue
             ref_base = ref_base[0]
             pos_in_seq = v["pos"] - lo + 1
-            seq_len = len(ref_seq_full)
 
             a1, a2 = (v["a1"] or "").upper(), (v["a2"] or "").upper()
-            # 哪一列是效应等位由调用方声明（SCZ 的 A1 常是参考等位，MDD 的 EA 是效应等位）
             if effect_col == "a2":
-                effect, other = a2, a1
+                eff_rep, ref_rep = a2, a1
             else:
-                effect, other = a1, a2
-            # 定链向：哪个等位等于参考碱基（先正链，再反向互补）；
-            # 再判断效应等位是参考等位还是替代等位。
+                eff_rep, ref_rep = a1, a2
+            if ref_col == "a1":
+                ref_rep = a1
+            elif ref_col == "a2":
+                ref_rep = a2
+
             def _rel(a):
                 if not a:
                     return None
                 if a == ref_base:
                     return "forward"
-                if revcomp(a) == ref_base:
-                    return "reverse"
-                return None
+                return "reverse" if revcomp(a) == ref_base else None
 
-            r_eff, r_oth = _rel(effect), _rel(other)
-            if not effect:
-                match = "no_effect_allele"
-            elif len(effect) != 1 or (other and len(other) != 1):
-                match = "indel_or_multiallelic"
-            elif r_oth == "forward":
-                match = "forward/effect_is_alt"
-            elif r_eff == "forward":
-                match = "forward/effect_is_ref"
-            elif r_oth == "reverse":
-                match = "reverse/effect_is_alt"
-            elif r_eff == "reverse":
-                match = "reverse/effect_is_ref"
+            r_eff, r_ref = _rel(eff_rep), _rel(ref_rep)
+            if not eff_rep:
+                strand = "no_effect_allele"
+            elif len(eff_rep) != 1 or (ref_rep and len(ref_rep) != 1):
+                strand = "indel_or_multiallelic"
+            elif r_eff == "forward" or r_ref == "forward":
+                strand = "forward"
+            elif r_eff == "reverse" or r_ref == "reverse":
+                strand = "reverse"
             else:
-                match = "unmatched"           # 可疑：构建不符或多等位
-            eff_base = effect[:1] if (effect and len(effect) == 1) else ref_base
-            ref_marked = build_sequence(ref_seq_full, pos_in_seq, ref_base, mark)
-            eff_marked = build_sequence(ref_seq_full, pos_in_seq, eff_base, mark)
+                strand = "unmatched"
 
-            rows.append({
+            # 统一到正链
+            if strand == "reverse":
+                eff_fwd = revcomp(eff_rep)[:1] if len(eff_rep) == 1 else ""
+                ref_fwd = revcomp(ref_rep)[:1] if len(ref_rep) == 1 else ""
+            else:
+                eff_fwd = eff_rep[:1] if len(eff_rep) == 1 else ""
+                ref_fwd = ref_rep[:1] if len(ref_rep) == 1 else ""
+
+            seqs = {
+                "genome": build_sequence(seq, pos_in_seq, ref_base, mark),
+                "gwas_ref": build_sequence(seq, pos_in_seq, ref_fwd or ref_base, mark),
+                "gwas_effect": build_sequence(seq, pos_in_seq, eff_fwd or ref_base, mark),
+            }
+            row = {
                 "rsid": v["id"], "chrom": v["chrom"], "pos": v["pos"], "build": build_label,
-                "ref_base": ref_base, "gwas_a1": a1, "gwas_a2": a2,
-                "effect_allele": effect, "other_allele": other, "allele_match": match,
-                "gwas_p": v["p"], "flank": flank, "seq_len": seq_len,
-                "snp_offset": pos_in_seq, "ref_seq": ref_marked, "effect_seq": eff_marked,
+                "genome_ref_base": ref_base,
+                "gwas_a1": a1, "gwas_a2": a2,
+                "gwas_ref_allele": ref_rep, "gwas_effect_allele": eff_rep,
+                "ref_fwd": ref_fwd, "effect_fwd": eff_fwd,
+                "strand_vs_genome": strand,
+                "effect_is_ref": "yes" if (eff_fwd and eff_fwd == ref_base) else "no",
+                "gwas_p": v["p"], "flank": flank, "seq_len": len(seq),
+                "snp_offset": pos_in_seq,
+                "genome_seq": seqs["genome"],
+                "gwas_ref_seq": seqs["gwas_ref"],
+                "gwas_effect_seq": seqs["gwas_effect"],
                 "status": "ok",
-                "note": "" if len(effect) == 1 else "非单碱基等位，未做替换",
-            })
+                "note": "" if len(eff_rep) == 1 else "非单碱基等位，未替换",
+            }
+            rows.append(row)
             meta = (f"{v['id']} chr{v['chrom']}:{v['pos']:,} {build_label} "
-                    f"ref={ref_base} a1={a1} a2={a2} effect={effect or '?'} "
-                    f"flank={flank} match={match}")
-            records.append((f"{v['id']}|effect|{meta}", eff_marked))
-            if include_ref:
-                records.append((f"{v['id']}|ref|{meta}", ref_marked))
+                    f"genome={ref_base} a1={a1} a2={a2} "
+                    f"ref={ref_rep or '?'} effect={eff_rep or '?'} "
+                    f"strand={strand} flank={flank}")
+            if include_genome:
+                records.append((f"{v['id']}|genome|{meta}", seqs["genome"]))
+            records.append((f"{v['id']}|gwas_ref|{meta}", seqs["gwas_ref"]))
+            records.append((f"{v['id']}|gwas_effect|{meta}", seqs["gwas_effect"]))
     finally:
         fa.close()
     return rows, records, missing, n_rows
 
 
+# =============================================================================
+# 可视化
+# =============================================================================
+BASE_COLORS = {"A": "#4daf4a", "C": "#377eb8", "G": "#ff7f00", "T": "#e41a1c",
+               "N": "#bdbdbd", "a": "#4daf4a", "c": "#377eb8", "g": "#ff7f00",
+               "t": "#e41a1c", "n": "#bdbdbd"}
+
+
+def plot_sequence(row, view=30, out=None, dpi=300, width_mm=180, row_mm=7.0,
+                  show_letters=None, font_size=6.0):
+    """把三条序列画成碱基色块图（每个 SNP 一张）。返回 figure。
+
+    row    : export() 产出的一行（需 status == ok）
+    view   : SNP 两侧各显示多少 bp
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    if row.get("status") != "ok":
+        raise ValueError(f"{row.get('rsid')}: 该行没有可用序列")
+
+    def _plain(seq):
+        """去掉 [ ] 标记（--mark brackets 时序列里带括号）"""
+        return seq.replace("[", "").replace("]", "")
+
+    def _center(seq, marked_offset0):
+        """括号会让偏移错位，按剥掉标记后的位置重算。"""
+        return len(_plain(seq[:marked_offset0]))
+
+    raw = {"genome": row["genome_seq"],
+           "gwas_ref": row["gwas_ref_seq"],
+           "gwas_effect": row["gwas_effect_seq"]}
+    groups = [("genome", "genome", row["genome_ref_base"]),
+              ("GWAS ref", "gwas_ref", row["ref_fwd"] or row["genome_ref_base"]),
+              ("GWAS effect", "gwas_effect", row["effect_fwd"] or row["genome_ref_base"])]
+    seqs = [(label, _plain(raw[key]), base_letter) for label, key, base_letter in groups]
+    n_full = max(len(x[1]) for x in seqs)
+    center = _center(raw["genome"], int(row["snp_offset"]) - 1)
+    lo = max(0, center - view)
+    hi = min(n_full, center + view + 1)
+    n = hi - lo
+    shown = min(center - lo, hi - 1 - center)
+
+    h_mm = 26 + row_mm * len(seqs)
+    fig = plt.figure(figsize=(width_mm / 25.4, h_mm / 25.4))
+    ax = fig.add_axes([0.12, 0.20, 0.84, 0.62])
+    ax.set_xlim(lo - 0.5, hi - 0.5)
+    ax.set_ylim(-0.6, len(seqs) - 0.05)
+    ax.invert_yaxis()
+    ax.set_yticks(range(len(seqs)))
+    ax.set_yticklabels([x[0] for x in seqs], fontsize=font_size + 0.6)
+    ax.set_xticks([])
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+
+    letters = show_letters
+    if letters is None:
+        cell_pt = (width_mm / 25.4 * 0.84 * 72) / max(n, 1)
+        letters = cell_pt >= 4.2
+
+    for r, (_, seq, _b) in enumerate(seqs):
+        seg = seq[lo:hi]
+        for i, ch in enumerate(seg):
+            up = ch.upper()
+            base_col = BASE_COLORS.get(up, "#cccccc")
+            is_snp = (lo + i) == center
+            ax.add_patch(Rectangle((lo + i - 0.5, r - 0.42), 1.0, 0.84,
+                                   facecolor=base_col, edgecolor="none",
+                                   alpha=0.95 if not is_snp else 1.0, zorder=2))
+            if letters:
+                ax.text(lo + i, r, up, ha="center", va="center",
+                        fontsize=font_size, color="white", zorder=3,
+                        fontweight="bold" if is_snp else "normal")
+        if not letters and len(seg):
+            ax.text(lo - 1.0, r, "5\u2032", ha="right", va="center", fontsize=font_size)
+    # SNP 竖线 + 方框
+    ax.axvline(center, color="#111111", lw=0.6, ls=":", zorder=1)
+    for r in range(len(seqs)):
+        ax.add_patch(Rectangle((center - 0.5, r - 0.44), 1.0, 0.88, facecolor="none",
+                               edgecolor="#111111", linewidth=0.9, zorder=4))
+    # 与基因组不同的列加标记
+    g = seqs[0][1][lo:hi]
+    for r in (1, 2):
+        for i, ch in enumerate(seqs[r][1][lo:hi]):
+            if ch.upper() != g[i].upper():
+                ax.plot([lo + i], [len(seqs) - 0.30 + (r - 1) * 0.13],
+                        marker="v", ms=2.4, color="#111111", zorder=5)
+
+    ttl = (f"{row['rsid']}  |  chr{row['chrom']}:{int(row['pos']):,} ({row['build']})  |  "
+           f"genome={row['genome_ref_base']}  GWAS ref={row.get('gwas_ref_allele') or '?'}"
+           f"  effect={row.get('gwas_effect_allele') or '?'}")
+    fig.text(0.02, 0.955, ttl, fontsize=font_size + 1.6, fontweight="bold", va="top")
+    sub = (f"strand={row.get('strand_vs_genome')}   effect_is_ref={row.get('effect_is_ref')}"
+           f"   P={row.get('gwas_p')}   shown \u00b1{shown} bp (exported \u00b1{row['flank']} bp)")
+    fig.text(0.02, 0.905, sub, fontsize=font_size, va="top", color="#444444")
+    fig.text(0.02, 0.045,
+             "A green \u00b7 C blue \u00b7 G orange \u00b7 T red   |   dotted line = SNP   "
+             "|   \u25bc = differs from genome",
+             fontsize=font_size - 0.4, color="#666666", va="bottom")
+    if out:
+        os.makedirs(os.path.dirname(os.path.abspath(out)) or ".", exist_ok=True)
+        fig.savefig(out, dpi=dpi)
+        if str(out).lower().endswith((".png", ".jpg")):
+            pass
+        else:
+            fig.savefig(os.path.splitext(out)[0] + ".png", dpi=dpi)
+    return fig
+
+
 def write_outputs(rows, records, out_tsv, out_fasta):
-    cols = ["rsid", "status", "chrom", "pos", "build", "ref_base", "gwas_a1", "gwas_a2",
-            "effect_allele", "other_allele", "allele_match", "gwas_p",
-            "flank", "seq_len", "snp_offset", "ref_seq", "effect_seq", "note"]
+    cols = ["rsid", "status", "chrom", "pos", "build", "genome_ref_base",
+            "gwas_a1", "gwas_a2", "gwas_ref_allele", "gwas_effect_allele",
+            "ref_fwd", "effect_fwd", "strand_vs_genome", "effect_is_ref",
+            "gwas_p", "flank", "seq_len", "snp_offset",
+            "genome_seq", "gwas_ref_seq", "gwas_effect_seq", "note"]
     if out_tsv:
         os.makedirs(os.path.dirname(os.path.abspath(out_tsv)) or ".", exist_ok=True)
         with open(out_tsv, "w") as fh:
@@ -287,7 +415,13 @@ def main(argv=None):
     ap.add_argument("--build-label", default="GRCh37")
     ap.add_argument("--effect-col", choices=["a1", "a2"], default="a1",
                     help="哪一列是效应等位：MDD 的 EA→a1；SCZ 若把 A1(参考等位) 映射成 a1，则用 a2")
-    ap.add_argument("--include-ref", action="store_true", help="FASTA 里同时输出参考序列")
+    ap.add_argument("--no-genome", action="store_true",
+                    help="FASTA 里不输出基因组参考序列（默认三条都输出）")
+    ap.add_argument("--ref-col", choices=["a1", "a2"], default=None,
+                    help="哪一列是 GWAS 的参考等位；缺省取 effect_col 的另一列")
+    ap.add_argument("--figure", default=None, metavar="DIR",
+                    help="每个 SNP 另存一张序列图到该目录（pdf + png）")
+    ap.add_argument("--view", type=int, default=30, help="图上显示 SNP 两侧各多少 bp（默认 30）")
     ap.add_argument("--out", default=None, help="输出 TSV")
     ap.add_argument("--fasta-out", default=None, help="输出 FASTA")
     a = ap.parse_args(argv)
@@ -312,12 +446,26 @@ def main(argv=None):
     rows, records, missing, n_rows = export(
         a.gwas, targets, a.fasta, flank=a.flank, columns=cols,
         comment_prefix=a.comment_prefix, build_label=a.build_label,
-        mark=a.mark, include_ref=a.include_ref, effect_col=a.effect_col)
+        mark=a.mark, include_genome=not a.no_genome,
+        effect_col=a.effect_col, ref_col=a.ref_col)
     ok = sum(1 for r in rows if r.get("status") == "ok")
     print(f"      扫描 {n_rows:,} 行 → 命中 {ok}/{len(targets)} 个 SNP", flush=True)
 
     print("[2/2] 写出", flush=True)
     write_outputs(rows, records, a.out, a.fasta_out)
+    if a.figure:
+        ok_rows = [r for r in rows if r.get("status") == "ok"]
+        if ok_rows:
+            os.makedirs(a.figure, exist_ok=True)
+            import matplotlib.pyplot as plt
+            for r in ok_rows:
+                p = os.path.join(a.figure, f"{r['rsid']}.pdf")
+                try:
+                    fig = plot_sequence(r, view=a.view, out=p)
+                    plt.close(fig)
+                except Exception as e:                        # noqa: BLE001
+                    print(f"      出图失败 {r['rsid']}: {type(e).__name__}: {e}", flush=True)
+            print(f"      图    {a.figure}/  ({len(ok_rows)} 个 SNP，±{a.view} bp)")
     if a.out:
         print(f"      TSV   {a.out}  ({len(rows)} 行)")
     if a.fasta_out:
@@ -325,10 +473,10 @@ def main(argv=None):
     if missing:
         print(f"      未在汇总统计中找到：{', '.join(missing[:8])}"
               + (" …" if len(missing) > 8 else ""), flush=True)
-    sus = [r["rsid"] for r in rows if r.get("allele_match") == "unmatched"]
+    sus = [r["rsid"] for r in rows if r.get("strand_vs_genome") == "unmatched"]
     if sus:
         print(f"      注意：{len(sus)} 个 SNP 的效应等位既不是参考碱基也不是其互补"
-              f"（可能是构建不符/多等位）：{', '.join(sus[:6])}", flush=True)
+              f"（构建不符或多等位，请核对）：{', '.join(sus[:6])}", flush=True)
     bad = [r["rsid"] for r in rows if r.get("status") != "ok"]
     if bad:
         print(f"      序列导出失败：{', '.join(bad[:8])}", flush=True)
