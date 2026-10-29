@@ -4,3 +4,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+
+# 开发者文档：本地保留，不推送
+README.dev.md

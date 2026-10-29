@@ -1,12 +1,13 @@
 # locuskit
 
-位点精细定位与调控证据作图。三个入口：**网页 GUI**、**命令行**、**Python 库**。
+给 GWAS 位点做图与序列导出的命令行工具，附一个网页界面。
 
-依赖：`numpy`、`matplotlib`、`PyYAML`（GUI 另需 `Flask`）。**不需要** pandas / plink。
+- **位点图**：GWAS 关联曲线（按 LD r² 着色）+ 基因模型 + 调控元件 + dlPFC 表观证据，
+  PDF 首页是图、其后自动附变异明细表
+- **序列导出**：按 SNP 批量导出 ±x bp 的**基因组参考 / GWAS 参考等位 / GWAS 效应等位**三条序列，可附序列图
+- 数据与坐标全部由配置声明（列名手动映射），SCZ / MDD / 任意汇总统计都能喂
 
-> 本文件先讲"要准备什么数据"，再讲"怎么用"，最后是配置字段与限制。
->
-> ⚠️ **最容易踩的坑是构建（GRCh37 vs GRCh38）** —— 见 [第二节](#二构建grch37-还是-grch38)。
+依赖：`numpy`、`matplotlib`、`PyYAML`（网页界面另需 `Flask`）。**不需要** pandas / plink。
 
 ---
 
@@ -239,21 +240,7 @@ python3 -m locuskit.cli config.yaml --outdir out --formats pdf,svg
 | `config_mdd_v2.yaml` | PGC-MDD 2025 EUR | GRCh37 | 无 credible set，`auto_loci` 自动识别 |
 | `config_nxph1_grch38.yaml` | MDD EUR · NXPH1 | GRCh38 | liftover + 显著 SNP 附表（P<5e-8） |
 
-### 3.3 桌面可执行文件
-
-不想装 Python 时，可以打包成单文件可执行程序（`locuskit-gui` / `locuskit-gui.exe`）：
-
-```bash
-bash packaging/build.sh      # Linux / macOS  → dist/locuskit-gui
-packaging\build.bat          # Windows        → dist\locuskit-gui.exe
-```
-
-把产物放到含 `code/` 与 `data/` 的目录后双击，浏览器会自动打开
-`http://127.0.0.1:8088/`。**数据不打进 exe**（通常几十 GB）。
-Linux 与 Windows 的完整构建步骤、三个必踩的坑和打包后自检见
-[第七节](#七打包为可执行文件)。
-
-### 3.4 导出序列（±x bp，可批量，可出图）
+### 3.3 导出序列（±x bp，可批量，可出图）
 
 按目标 SNP 导出**三条序列**：
 
@@ -319,7 +306,7 @@ python -m locuskit.seq ... --snp 1:1939826
 **GUI**：左侧「模式」切到**序列导出**后填 SNP（可批量）、FASTA 路径、`±bp`、
 标记方式、效应/参考列，勾「同时出序列图」即可；结果给出 TSV/FASTA 下载与图片画廊。
 
-### 3.5 Python 库
+### 3.4 Python 库
 
 ```python
 from locuskit import (scan_windows, apply_liftover, Chain, LDPanel,
@@ -538,144 +525,19 @@ ld_cmap: [[0,"#d9d9d9"],[0.2,"#d9d9d9"],[0.2,"#1f78b4"],[1,"#8c0d0d"]]   # 指�
 
 ---
 
-## 七、打包为可执行文件
+## 七、限制
 
-Python 环境齐全的人直接 `python3 -m locuskit` 即可；要发给不装 Python 的人时再打包。
-
-> **PyInstaller 不支持交叉编译**：要 `.exe` 就在 Windows 上打，要 Linux 二进制就在 Linux 上打。
-> 打出来的程序**不含数据**（`data/` 常几十 GB），需与 `code/`、`data/` 放在同一目录。
-
-### 7.1 前置
-
-| 项 | 要求 |
-|---|---|
-| Python | 3.10–3.12（本机验证 3.10.19） |
-| PyInstaller | **6.x**（5.13 在 anaconda Python 3.10.19 上打出的程序起不来） |
-| 虚拟环境 | **必须新建干净 venv**，不要加 `--system-site-packages` |
-
-```bash
-python -m pip install numpy matplotlib flask pyyaml pyinstaller
-```
-
-### 7.2 Linux / macOS
-
-```bash
-cd locuskit                                   # 仓库根（= 包目录）
-python3 -m venv .venv-pack
-. .venv-pack/bin/activate
-python -m pip install -U pip
-python -m pip install numpy matplotlib flask pyyaml pyinstaller
-
-python build_exe.py                           # 产物：dist/locuskit-gui
-```
-
-### 7.3 Windows
-
-```bat
-cd locuskit
-python -m venv .venv-pack
-.venv-pack\Scripts\activate.bat
-python -m pip install -U pip
-python -m pip install numpy matplotlib flask pyyaml pyinstaller
-
-python build_exe.py                           :: 产物：dist\locuskit-gui.exe
-```
-
-`build_exe.py` 会自己算好两个容易写错的路径（`--paths` 必须是**包的父目录**，
-入口是包内的 `__main__.py`），并默认 `--onefile`、排除 Qt/pandas/scipy 等用不到的重依赖。
-常用选项：`--debug`（保留控制台）、`--dist out/`（换输出目录）、`--no-hooks`。
-
-没有 Windows 机器时可在 CI 里跑：GitHub Actions 用 `windows-latest` 执行上面三行，
-把 `dist/locuskit-gui.exe` 作为 artifact 上传。
-
-### 7.4 等价的手工命令
-
-不想用 `build_exe.py` 时（注意在**仓库的上一层**执行，`--paths` 指向该层）：
-
-```bash
-python -m PyInstaller --onefile --name locuskit-gui --clean --noconfirm \
-  --paths .. --collect-submodules locuskit \
-  --additional-hooks-dir locuskit/_pyinstaller_hooks \
-  --exclude-module tkinter --exclude-module pandas --exclude-module scipy \
-  --exclude-module PyQt5 --exclude-module PyQt6 \
-  --exclude-module PySide2 --exclude-module PySide6 \
-  --exclude-module shiboken2 --exclude-module shiboken6 \
-  locuskit/__main__.py
-```
-
-### 7.5 三个必须注意的点
-
-1. **干净 venv**：anaconda 的 numpy 外链 MKL，打出来的程序一启动就报
-   `libmkl_core.so.2: cannot open shared object file`。干净 venv 装的是 PyPI numpy，
-   自带 OpenBLAS 在 `numpy.libs/`，才会被一起打包。`build_exe.py` 会检测并警告这种情况。
-2. **PyInstaller 用 6.x**：5.13 在本机 anaconda 3.10.19 上连 hello-world 都因
-   `ModuleNotFoundError: ipaddress` 起不来。
-3. **排除所有 Qt 绑定**：环境里同时有 PyQt6 与 PySide6 时 PyInstaller 直接中止；
-   本工具只用 Agg 后端，已全部排除。
-
-若报 `Failed to import module __PyInstaller_hooks_0_numpy`（内置 hook 加载失败），
-挂上仓库里的最小 hook：
-
-```bash
---additional-hooks-dir locuskit/_pyinstaller_hooks
-```
-
-里面有 `hook-numpy.py`（收集 `numpy.libs/*.so`）与 `hook-matplotlib.py`（收集 `mpl-data`）。
-
-### 7.6 打包后自检
-
-```bash
-./dist/locuskit-gui --help                        # 1) 能启动
-./dist/locuskit-gui --no-browser --port 8088 &    # 2) 页面可访问
-curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8088/
-curl -s -X POST http://127.0.0.1:8088/plot -H 'Content-Type: application/json' \
-  -d '{"config":"code/config_scz_v2.yaml","snp":"rs4702","chrom":"5",
-       "tracks":["ld","genes","reg"],"table_source":"ld","ld_cut":"0.8"}'   # 3) 能出图
-```
-
-三步都过才算可用；只做第 1 步容易漏掉 numpy/matplotlib 没被收进包里的问题。
-
-### 7.7 分发怎么摆
-
-```
-locuskit-work/
-├── locuskit-gui        ← 可执行文件（Windows 为 .exe）
-├── code/               ← config*.yaml，GUI 下拉读这里
-├── data/               ← 汇总统计、GTF、LD 面板…
-└── figures_gui/        ← 出图自动写到这里
-```
-
-双击可执行文件 → 浏览器自动打开 `http://127.0.0.1:8088/`。
-服务器上用 `--no-browser --port N`，或用 `--root` 指定别的工作目录。
+* `ld.match_by: position` 要求 LD 面板与汇总统计同构建；跨构建请用 `rsid`。
+* 用 EUR 面板给东亚数据上色属近似：面板里没有的变异保持灰点。
+* 序列导出只处理单碱基等位；indel / 多等位会在 `note` 列标注且不做替换。
+* `unmatched`（等位与参考碱基都不匹配）通常意味着构建不符或该位点有多等位，需人工核对。
 
 ---
 
-## 八、代码结构
+## 八、想要可执行文件？
 
-```
-locuskit/
-├── liftover.py   Chain            GRCh37 ↔ GRCh38（UCSC chain，双向）
-├── gwas.py       scan_windows()   汇总统计按窗口流式读取
-├── ld.py         LDPanel          PLINK .bed 直算 r²（位置 / rsID 匹配）
-├── annot.py      GeneIndex        Ensembl GTF 基因模型（pickle 缓存）
-│                 RegFeatures      Ensembl 调控元件
-│                 EncodePeaks      多数据集 peak 支持度（缓存）
-│                 EvidenceTable    SNP → 各 mark 命中数
-├── render.py     plot_locus()     1–4 条轨道的位点图（版面按毫米自适应）
-├── tables.py     detail_pages()   附表（列可自定义，缺字段自动省略）
-├── cli.py                         YAML 批量出图
-├── seq.py                         序列导出（±x bp，效应等位版本）
-├── gui.py                         Flask 单页界面
-├── style.py                       样式表与预设
-├── __main__.py                    `python -m locuskit` / 可执行文件入口
-├── build_exe.py                   一键打包（PyInstaller）
-└── _pyinstaller_hooks/            内置 hook 加载失败时的最小 hook
-```
+打包成单文件程序（Linux/macOS 的 `locuskit-gui`、Windows 的 `locuskit-gui.exe`）的步骤、
+构建时的坑与自检清单，见开发者文档 **`README.dev.md`**（该文件不入库）。
 
-## 九、限制
-
-* `ld.match_by: position` 要求面板与汇总统计同构建；跨构建请用 `rsid`。
-* 用 EUR 面板给东亚数据上色属近似：面板里没有的变异保持灰点。
-* `EncodePeaks` 首次读该 mark 全部 `bed.gz`（每类 20 个），之后走缓存。
-* 只做"以某个 index SNP 为参照的 r²"，不含 LD 聚类或条件分析。
-* 附表 `position` 列是图上所用构建的坐标；原始坐标保留在记录的 `pos_src`。
+简单说：在**干净 venv** 里装好依赖后跑 `python build_exe.py`，产物在 `dist/`，
+把它放到含 `code/` 与 `data/` 的目录双击即可。
